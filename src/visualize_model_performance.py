@@ -28,9 +28,7 @@ def run_analysis_and_plot():
     kf = KFold(n_splits=k, shuffle=True, random_state=42)
     
     fold_c_indices = []
-    all_val_risks = []
-    all_val_times = []
-    all_val_events = []
+    fold_results = []
     
     print(f"시각화를 위한 {k}-Fold 교차 검증 실행 중...")
     
@@ -92,57 +90,59 @@ def run_analysis_and_plot():
         print(f"Fold {fold+1} C-Index: {best_ci:.4f}")
         fold_c_indices.append(best_ci)
         
-        # 최고 성능 Epoch의 예측값 수집
-        all_val_risks.extend(best_risk.flatten())
-        all_val_times.extend(best_t.flatten())
-        all_val_events.extend(best_e.flatten())
+        # 최고 성능 Epoch의 예측값 저장
+        fold_results.append({
+            'risk': best_risk.flatten(),
+            'time': best_t.flatten(),
+            'event': best_e.flatten()
+        })
 
-    # 시각화 (Plotting)
-    fig = plt.figure(figsize=(14, 6))
+    # 시각화 (Plotting) - 2x3 Grid (1 Bar + 5 Scatter)
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    axes = axes.flatten()
     
     # Plot 1: Fold별 C-Index
-    ax1 = plt.subplot(1, 2, 1)
+    ax1 = axes[0]
     folds = range(1, k+1)
     bars = ax1.bar(folds, fold_c_indices, color='skyblue', edgecolor='black')
     ax1.set_xlabel('Fold Number', fontsize=12)
     ax1.set_ylabel('C-Index', fontsize=12)
-    ax1.set_title('Fold별 모델 성능 (Model Performance by Fold)', fontsize=14, weight='bold')
+    ax1.set_title('Fold별 모델 성능 (Model Performance)', fontsize=14, weight='bold')
     ax1.set_ylim(0.5, 1.0)
     ax1.grid(axis='y', linestyle='--', alpha=0.7)
     
-    # 막대 위에 값 표시
     for bar in bars:
         height = bar.get_height()
         ax1.text(bar.get_x() + bar.get_width()/2., height,
                 f'{height:.4f}',
                 ha='center', va='bottom')
                 
-    # Plot 2: 위험 점수 vs 실제 생존 시간 (예측력)
-    ax2 = plt.subplot(1, 2, 2)
-    
-    # 이벤트가 발생한(Uncensored) 데이터만 필터링하여 상관관계 분석
-    events_mask = np.array(all_val_events) == 1
-    risks = np.array(all_val_risks)[events_mask]
-    times = np.array(all_val_times)[events_mask]
-    
-    # 산점도 (Scatter Plot)
-    scatter = ax2.scatter(risks, times, c=times, cmap='viridis_r', alpha=0.6)
-    
-    # 추세선 (Trend Line)
-    z = np.polyfit(risks, times, 1)
-    p = np.poly1d(z)
-    ax2.plot(risks, p(risks), "r--", linewidth=2, label='Trend')
-    
-    ax2.set_xlabel('예측된 위험 점수 (Predicted Risk Score)', fontsize=12)
-    ax2.set_ylabel('실제 남은 수명 (Actual Remaining Cycles)', fontsize=12)
-    ax2.set_title('예측력: 위험도 vs 생존 시간 (Risk vs Time)', fontsize=14, weight='bold')
-    ax2.grid(True, alpha=0.5)
-    ax2.legend()
-    
-    # 상관계수 표시
-    corr = np.corrcoef(risks, times)[0, 1]
-    ax2.text(0.05, 0.95, f'Correlation: {corr:.2f}', transform=ax2.transAxes, 
-             fontsize=12, bbox=dict(facecolor='white', alpha=0.8))
+    # Plot 2~6: 각 Fold별 Scatter Plot
+    for i in range(k):
+        ax = axes[i+1]
+        result = fold_results[i]
+        
+        # 이벤트가 발생한 데이터만 필터링
+        events_mask = result['event'] == 1
+        risks = result['risk'][events_mask]
+        times = result['time'][events_mask]
+        
+        if len(risks) > 0:
+            scatter = ax.scatter(risks, times, c=times, cmap='viridis_r', alpha=0.6)
+            
+            if len(risks) > 1:
+                z = np.polyfit(risks, times, 1)
+                p = np.poly1d(z)
+                ax.plot(risks, p(risks), "r--", linewidth=2, label='Trend')
+                
+                corr = np.corrcoef(risks, times)[0, 1]
+                ax.text(0.05, 0.95, f'Corr: {corr:.2f}', transform=ax.transAxes, 
+                        fontsize=11, bbox=dict(facecolor='white', alpha=0.8))
+        
+        ax.set_xlabel('Predicted Risk', fontsize=10)
+        ax.set_ylabel('Actual Cycles', fontsize=10)
+        ax.set_title(f'Fold {i+1} : Risk vs Time', fontsize=12, weight='bold')
+        ax.grid(True, alpha=0.5)
 
     plt.tight_layout()
     output_path = os.path.join(PLOTS_DIR, "model_performance_metrics.png")
