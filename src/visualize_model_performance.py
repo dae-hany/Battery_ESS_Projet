@@ -100,6 +100,20 @@ def run_analysis_and_plot():
     # 시각화 (Plotting) - 2x3 Grid (1 Bar + 5 Scatter)
     fig, axes = plt.subplots(2, 3, figsize=(18, 10))
     axes = axes.flatten()
+
+    # 모든 Fold의 데이터 범위 계산 (축 통일용)
+    all_risks = np.concatenate([res['risk'] for res in fold_results])
+    all_times = np.concatenate([res['time'] for res in fold_results])
+    
+    x_min, x_max = all_risks.min(), all_risks.max()
+    y_min, y_max = all_times.min(), all_times.max()
+    
+    # 여백 추가
+    x_margin = (x_max - x_min) * 0.05
+    y_margin = (y_max - y_min) * 0.05
+    x_lim = (x_min - x_margin, x_max + x_margin)
+    y_lim = (y_min - y_margin, y_max + y_margin)
+
     
     # Plot 1: Fold별 C-Index
     ax1 = axes[0]
@@ -107,7 +121,7 @@ def run_analysis_and_plot():
     bars = ax1.bar(folds, fold_c_indices, color='skyblue', edgecolor='black')
     ax1.set_xlabel('Fold Number', fontsize=12)
     ax1.set_ylabel('C-Index', fontsize=12)
-    ax1.set_title('Fold별 모델 성능 (Model Performance)', fontsize=14, weight='bold')
+    ax1.set_title('Model Performance By Fold', fontsize=14, weight='bold')
     ax1.set_ylim(0.5, 1.0)
     ax1.grid(axis='y', linestyle='--', alpha=0.7)
     
@@ -142,6 +156,8 @@ def run_analysis_and_plot():
         ax.set_xlabel('Predicted Risk', fontsize=10)
         ax.set_ylabel('Actual Cycles', fontsize=10)
         ax.set_title(f'Fold {i+1} : Risk vs Time', fontsize=12, weight='bold')
+        ax.set_xlim(x_lim)
+        ax.set_ylim(y_lim)
         ax.grid(True, alpha=0.5)
 
     plt.tight_layout()
