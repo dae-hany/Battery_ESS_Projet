@@ -1,0 +1,33 @@
+{
+  "baseline": {
+    "architecture": "MLP (Fully Connected)",
+    "input_shape": "2D (Batch, Features)",
+    "best_val_cindex": 0.9008272506082725,
+    "final_train_cindex": 0.8235396939249098,
+    "epochs_trained": 29,
+    "features": [
+      "capacity",
+      "soh",
+      "soh_derivative",
+      "capacity_derivative"
+    ]
+  },
+  "advanced": {
+    "architecture": "LSTM + MLP",
+    "input_shape": "3D (Batch, Window=26, Features)",
+    "best_val_cindex": 1.0,
+    "final_train_cindex": 0.9170331539750747,
+    "epochs_trained": 38,
+    "hyperparameters": {
+      "window_size": 26,
+      "hidden_dim": 32,
+      "num_layers": 3,
+      "dropout": 0.33585155135116124,
+      "learning_rate": 0.0017548024092276344
+    }
+  },
+  "improvement": {
+    "absolute_cindex_gain": 0.09917274939172749,
+    "relative_improvement_percent": 11.009075194468453
+  }
+}

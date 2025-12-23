@@ -1,0 +1,23 @@
+{
+  "baseline": {
+    "architecture": "MLP",
+    "best_val_cindex": 0.9128953771289537,
+    "epochs": 57
+  },
+  "advanced": {
+    "architecture": "LSTM + MLP",
+    "best_val_cindex": 1.0,
+    "epochs": 40,
+    "hyperparameters": {
+      "window_size": 26,
+      "hidden_dim": 32,
+      "num_layers": 3,
+      "dropout": 0.33585155135116124,
+      "learning_rate": 0.0017548024092276344
+    }
+  },
+  "improvement": {
+    "absolute": 0.08710462287104626,
+    "relative_percent": 9.541577825159917
+  }
+}
