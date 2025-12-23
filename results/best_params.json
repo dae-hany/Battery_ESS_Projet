@@ -1,0 +1,11 @@
+{
+    "best_cindex": 1.0,
+    "best_params": {
+        "window_size": 26,
+        "hidden_dim": 32,
+        "num_layers": 3,
+        "dropout": 0.33585155135116124,
+        "learning_rate": 0.0017548024092276344
+    },
+    "n_trials": 20
+}

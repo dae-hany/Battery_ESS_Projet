@@ -1,0 +1,20 @@
+{
+    "best_epoch": 47,
+    "best_val_cindex": 0.970671595810228,
+    "min_val_loss": 1.9003340005874634,
+    "config": {
+        "window_size": 10,
+        "batch_size": 32,
+        "input_dim": 4,
+        "hidden_dim": 64,
+        "num_layers": 2,
+        "dropout": 0.3,
+        "learning_rate": 0.001,
+        "epochs": 100,
+        "patience": 20,
+        "weight_decay": 0.0001,
+        "base_dir": "C:\\Users\\daeho\\OneDrive\\\ubc14\ud0d5 \ud654\uba74\\Battery_ESS_Project",
+        "results_dir": "results",
+        "plots_dir": "plots"
+    }
+}
