@@ -29,6 +29,7 @@ if project_root not in sys.path:
 from src.data_loader import DataConfig, BatteryDataProcessor, get_dataloaders
 from src.models import LSTMDeepSurv
 from src.trainer import DeepSurvTrainer
+from src.metrics import BreslowEstimator, calculate_expected_rul, calculate_rmse
 
 # ===================================================================================
 # Configuration
@@ -113,7 +114,7 @@ def run_pipeline():
     data_config = DataConfig(
         base_dir=exp_config.base_dir, 
         window_size=exp_config.window_size,
-        feature_set_name='dynamic' # or 'full'
+        feature_set_name='advanced' # Path Signature Enhanced
     )
     
     train_loader, val_loader = get_dataloaders(data_config, batch_size=exp_config.batch_size)
@@ -171,7 +172,56 @@ def run_pipeline():
         json.dump(final_metrics, f, indent=4)
         
     print(f"[Result] Best Validation C-Index: {final_metrics['best_val_cindex']:.4f} (Epoch {final_metrics['best_epoch']})")
-    print(f"[Result] Metrics saved to {metrics_path}")
+    
+    # 6. Advanced Evaluation (RMSE via Breslow)
+    print("\n[Step 5] Calculating Advanced Metrics (RMSE)...")
+    
+    # Needs model in eval mode
+    trainer.model.eval()
+    
+    # Collect training data for Breslow Baseline
+    train_risks, train_times, train_events = [], [], []
+    with torch.no_grad():
+        for bx, bt, be in train_loader:
+            bx = bx.to(device)
+            out = trainer.model(bx)
+            train_risks.append(out.cpu().numpy())
+            train_times.append(bt.numpy())
+            train_events.append(be.numpy())
+    
+    train_risks = np.concatenate(train_risks)
+    train_times = np.concatenate(train_times)
+    train_events = np.concatenate(train_events)
+    
+    # Fit Breslow
+    breslow = BreslowEstimator()
+    breslow.fit(train_risks, train_times, train_events)
+    
+    # Validate
+    val_risks, val_times = [], []
+    with torch.no_grad():
+        for bx, bt, be in val_loader:
+            bx = bx.to(device)
+            out = trainer.model(bx)
+            val_risks.append(out.cpu().numpy())
+            val_times.append(bt.numpy())
+            
+    val_risks = np.concatenate(val_risks)
+    val_times = np.concatenate(val_times)
+    
+    # Predict RUL
+    surv_df = breslow.get_survival_function(val_risks)
+    pred_rul = calculate_expected_rul(surv_df)
+    rmse_val = calculate_rmse(val_times, pred_rul)
+    
+    final_metrics['val_rmse'] = float(rmse_val)
+    
+    # Update JSON
+    with open(metrics_path, 'w') as f:
+        json.dump(final_metrics, f, indent=4)
+        
+    print(f"[Result] Validation RMSE: {rmse_val:.4f} cycles")
+    print(f"[Result] Full metrics updated in {metrics_path}")
 
 if __name__ == "__main__":
     run_pipeline()

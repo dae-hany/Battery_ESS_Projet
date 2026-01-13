@@ -31,6 +31,9 @@ from torch.utils.data import Dataset, DataLoader
 # Configuration
 # ===================================================================================
 
+from src.features.path_signature import extract_path_signature
+from src.features.delta_q import extract_delta_q, interpolate_qv
+
 @dataclass
 class DataConfig:
     """데이터 처리 관련 설정 클래스"""
@@ -38,6 +41,7 @@ class DataConfig:
     base_dir: str = r"C:\Users\daeho\OneDrive\바탕 화면\Battery_ESS_Project"
     metadata_path: str = None
     data_dir: str = None
+    cache_dir: str = None # 캐시 디렉토리
     
     # 데이터 필터링 파라미터
     min_init_capacity: float = 1.5  # 최소 초기 용량 (Ah)
@@ -50,14 +54,17 @@ class DataConfig:
     random_seed: int = 42           # 재현성을 위한 시드
     
     # 피처 설정
-    feature_set_name: str = "full"  # 'basic', 'dynamic', 'full'
+    feature_set_name: str = "advanced"  # 'basic', 'dynamic', 'full', 'advanced', 'delta_q', 'all' 
     
     def __post_init__(self):
-        # 경로 자동 설정
+        # ... (same) ...
         if self.metadata_path is None:
             self.metadata_path = os.path.join(self.base_dir, "cleaned_dataset", "metadata.csv")
         if self.data_dir is None:
             self.data_dir = os.path.join(self.base_dir, "cleaned_dataset", "data")
+        if self.cache_dir is None:
+            self.cache_dir = os.path.join(self.base_dir, "cache")
+            os.makedirs(self.cache_dir, exist_ok=True)
 
 # ===================================================================================
 # PyTorch Dataset
@@ -84,10 +91,6 @@ class BatteryDataset(Dataset):
         # (Input, Time, Event) 반환
         return self.features[idx], self.times[idx], self.events[idx]
 
-# ===================================================================================
-# Data Processor
-# ===================================================================================
-
 class BatteryDataProcessor:
     """배터리 데이터 전처리 및 Sliding Window 데이터셋 생성 클래스"""
     
@@ -95,31 +98,43 @@ class BatteryDataProcessor:
         self.config = config
         self.scaler = StandardScaler()
         self.feature_names = []
+        self.sig_dim = 0
+        self.delta_q_dim = 6 # var, min, mean, skew, kurt, range
+        self.v_grid = np.linspace(2.5, 4.2, 100) # Common Voltage Grid for NMC/LCO
         
     def _get_feature_names(self, feature_set_name: str) -> List[str]:
         """피처 세트 이름 반환"""
-        all_features = {
-            'capacity': 'capacity',
-            'capacity_smooth': 'capacity_smooth',
-            'soh': 'soh',
-            'soh_derivative': 'soh_derivative',
-            'capacity_derivative': 'capacity_derivative',
-            'capacity_rolling_std': 'capacity_rolling_std'
-        }
+        basic_features = ['capacity', 'soh']
+        dynamic_features = ['soh_derivative', 'capacity_derivative']
+        stat_features = ['capacity_rolling_std']
         
+        # Signature features
+        sig_features = [f'sig_{i}' for i in range(self.sig_dim)] if self.sig_dim > 0 else []
+        
+        # Delta Q features
+        delta_q_features = ['dq_var', 'dq_min', 'dq_mean', 'dq_skew', 'dq_kurt', 'dq_range']
+
         if feature_set_name == 'basic':
-            return ['capacity', 'soh']
+            return basic_features
         elif feature_set_name == 'dynamic':
-            return ['capacity', 'soh', 'soh_derivative', 'capacity_derivative']
+            return basic_features + dynamic_features
         elif feature_set_name == 'full':
-            return list(all_features.values())
+            return basic_features + dynamic_features + stat_features
+        elif feature_set_name == 'advanced':
+            # Path Signature only
+            return basic_features + dynamic_features + stat_features + sig_features
+        elif feature_set_name == 'delta_q':
+            # Delta Q only (on top of dynamic)
+            return basic_features + dynamic_features + stat_features + delta_q_features
+        elif feature_set_name == 'all':
+            # Everything
+            return basic_features + dynamic_features + stat_features + delta_q_features + sig_features
         else:
             raise ValueError(f"Unknown feature_set: {feature_set_name}")
 
     def _preprocess_capacity(self, capacities: np.ndarray, outlier_threshold: float = 0.5) -> np.ndarray:
         """
         용량 데이터 전처리: 이상치 제거 및 측정 오류 보정.
-        DeepSurv_Journal_Analysis.py의 로직을 계승.
         """
         cleaned = capacities.copy()
         
@@ -129,16 +144,12 @@ class BatteryDataProcessor:
             
             if prev_val > 0:
                 drop_ratio = (prev_val - curr_val) / prev_val
-                
-                # 급격한 용량 감소(Outlier) 감지 시 이전 값으로 대체
                 if drop_ratio > outlier_threshold:
                     cleaned[i] = prev_val
-                
-                # 0에 가까운 값(측정 에러) 보정
                 if curr_val < 0.1:
                     cleaned[i] = prev_val
                     
-        # Median Filter 적용 (스파이크 노이즈 제거)
+        # Median Filter
         if len(cleaned) >= 3:
             cleaned = medfilt(cleaned, kernel_size=3)
             
@@ -148,52 +159,79 @@ class BatteryDataProcessor:
         """
         개별 배터리에 대한 피처 엔지니어링 수행.
         """
-        # 1. Raw Data 복사
         bat_df = bat_df.copy()
         raw_capacity = bat_df['capacity'].values.copy()
         
-        # 2. 전처리 (이상치 제거)
+        # Preprocess
         cleaned_capacity = self._preprocess_capacity(raw_capacity)
         bat_df['capacity'] = cleaned_capacity
         
-        # 3. 스무딩 (Smoothing)
+        # Smoothing
         bat_df['capacity_smooth'] = bat_df['capacity'].rolling(window=7, min_periods=1, center=True).mean()
         bat_df['capacity_smooth'] = bat_df['capacity_smooth'].fillna(bat_df['capacity'])
         
-        # 4. SOH 계산
+        # SOH
         bat_df['soh'] = bat_df['capacity_smooth'] / init_cap
         
-        # 5. 파생 변수 생성
+        # Derivatives
         bat_df['soh_derivative'] = bat_df['soh'].diff().fillna(0)
         bat_df['capacity_derivative'] = bat_df['capacity'].diff().fillna(0)
         bat_df['capacity_rolling_std'] = bat_df['capacity'].rolling(window=10, min_periods=1).std().fillna(0)
         
-        # 6. EOL(End of Life) 및 Event 결정
+        # EOL & Event
         eol_indices = bat_df.index[bat_df['soh'] < self.config.soh_threshold].tolist()
         
         if eol_indices:
-            event = 1 # Uncensored (수명 종료 관측됨)
+            event = 1 
             eol_cycle = eol_indices[0]
         else:
-            event = 0 # Censored (수명 종료 전 실험 중단)
+            event = 0 
             eol_cycle = len(bat_df) - 1
             
         bat_df['event'] = event
         bat_df['eol_cycle'] = eol_cycle
         
-        # 7. RUL(잔존 수명) 계산 -> Time으로 사용
-        # 현재 사이클 k에서의 RUL = eol_cycle - k
-        # EOL 이후의 데이터는 학습에서 제외하는 것이 일반적임
+        # RUL
         bat_df['time'] = (eol_cycle - bat_df.index).astype(float)
-        
-        # EOL 이후 데이터 제거 (선택 사항: 여기서는 유지하고 Window 생성 시 필터링하거나 그냥 둠)
-        # 하지만 RUL 예측 문제에서는 EOL 도달 시 RUL=0 이므로, 그 이후는 의미가 적음.
-        # 여기서는 전체 데이터를 반환하되, RUL이 음수가 되는 지점은 이후 로직에서 처리.
         
         return bat_df
 
-    def load_and_process_features(self) -> Tuple[pd.DataFrame, List[str]]:
+    def _extract_cycle_data(self, filename: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Helper to load V, I, T from file"""
+        file_path = os.path.join(self.config.data_dir, filename)
+        if not os.path.exists(file_path):
+            return None, None, None
+            
+        try:
+            df = pd.read_csv(file_path)
+            cols = df.columns
+            v_col = next((c for c in cols if 'voltage' in c.lower()), None)
+            i_col = next((c for c in cols if 'current' in c.lower()), None)
+            t_col = next((c for c in cols if 'time' in c.lower()), None)
+            
+            if not (v_col and i_col and t_col):
+                return None, None, None
+                
+            return df[v_col].values, df[i_col].values, df[t_col].values
+        except:
+            return None, None, None
+
+    def load_and_process_features(self, use_cache: bool = True) -> Tuple[pd.DataFrame, List[str]]:
         """메타데이터 로드 및 모든 배터리의 피처를 포함한 DataFrame 생성"""
+        
+        cache_path = os.path.join(self.config.cache_dir, f"features_{self.config.feature_set_name}.pkl")
+        
+        if use_cache and os.path.exists(cache_path):
+            print(f"[Info] Loading features from cache: {cache_path}")
+            final_df = pd.read_pickle(cache_path)
+            
+            # Restore dims
+            sig_cols = [c for c in final_df.columns if c.startswith('sig_')]
+            self.sig_dim = len(sig_cols)
+            self.feature_names = self._get_feature_names(self.config.feature_set_name)
+            return final_df, self.feature_names
+
+        # ... (Loading metadata same as before) ...
         print("[Info] Loading metadata...")
         if not os.path.exists(self.config.metadata_path):
              raise FileNotFoundError(f"Metadata file not found: {self.config.metadata_path}")
@@ -201,7 +239,6 @@ class BatteryDataProcessor:
         metadata = pd.read_csv(self.config.metadata_path)
         metadata.columns = [c.strip().lower() for c in metadata.columns]
         
-        # 방전(Discharge) 데이터만 필터링
         discharge_df = metadata[metadata['type'] == 'discharge'].copy()
         discharge_df['capacity'] = pd.to_numeric(discharge_df['capacity'], errors='coerce')
         discharge_df = discharge_df.dropna(subset=['capacity'])
@@ -213,21 +250,93 @@ class BatteryDataProcessor:
             bat_df = discharge_df[discharge_df['battery_id'] == bat_id].copy()
             bat_df = bat_df.sort_values('test_id').reset_index(drop=True)
             
-            # 최소 사이클 조건 확인
             if len(bat_df) < self.config.min_cycles:
                 continue
-                
             init_cap = bat_df['capacity'].iloc[0]
             if init_cap < self.config.min_init_capacity:
                 continue
                 
-            # 개별 배터리 처리
+            # Basic Processing
             df_processed = self._process_battery(bat_df, bat_id, init_cap)
+            
+            # --- Advanced Features ---
+            need_sig = self.config.feature_set_name in ['advanced', 'all']
+            need_delta_q = self.config.feature_set_name in ['delta_q', 'all']
+            
+            if need_sig or need_delta_q:
+                print(f"  > Extracting advanced features for {bat_id}...", end='\r')
+                
+                signatures = []
+                delta_qs = []
+                
+                # Reference Cycle for Delta Q (Cycle 1)
+                ref_q_interp = None
+                
+                for idx, row in df_processed.iterrows():
+                    filename = row['filename']
+                    v, i, t = self._extract_cycle_data(filename)
+                    
+                    if v is None: # Load failed
+                        if need_sig: signatures.append(np.zeros(12)) # Fallback assumption
+                        if need_delta_q: delta_qs.append(np.zeros(6))
+                        continue
+                        
+                    # 1. Path Signature
+                    if need_sig:
+                        sig = extract_path_signature(v, i, t, level=2)
+                        signatures.append(sig)
+                        
+                    # 2. Delta Q(V)
+                    if need_delta_q:
+                        # Need capacity curve (Ah). Usually calculated by integrating Current over Time.
+                        # Ah = cumtrapz(I, t) / 3600.
+                        # Check units: I in Amps, t in Seconds -> Ah.
+                        # Assuming I is discharge current (positive or negative). 
+                        # Usually discharge current is positive in dataset or negative?
+                        # Nasa dataset: Discharge current is usually positive load, but stored as negative?
+                        # Let's compute Q(t) = Integ |I| dt.
+                        
+                        # Simple integration
+                        # Use abs(I) to be safe for capacity throughput
+                        q_t = np.cumsum(np.abs(i)) * (t[1] - t[0]) / 3600.0 if len(t) > 1 else np.zeros_like(v)
+                        # Normalize Q to start at 0? Yes.
+                        # But wait, Delta Q(V) is Q(V). 
+                        # We use the raw Q values vs V.
+                        
+                        # Reference Setup
+                        if idx == 0:
+                            ref_q_interp = interpolate_qv(v, q_t, self.v_grid)
+                            
+                        # Extract Features
+                        if ref_q_interp is not None:
+                            dq_feats = extract_delta_q(v, q_t, ref_q_interp, self.v_grid)
+                        else:
+                            dq_feats = np.zeros(6)
+                            
+                        delta_qs.append(dq_feats)
+
+                # Attach to DataFrame
+                if need_sig and signatures:
+                    sig_matrix = np.vstack(signatures)
+                    self.sig_dim = sig_matrix.shape[1]
+                    for k in range(self.sig_dim):
+                        df_processed[f'sig_{k}'] = sig_matrix[:, k]
+                        
+                if need_delta_q and delta_qs:
+                    dq_matrix = np.vstack(delta_qs)
+                    km = ['dq_var', 'dq_min', 'dq_mean', 'dq_skew', 'dq_kurt', 'dq_range']
+                    for k, name in enumerate(km):
+                        df_processed[name] = dq_matrix[:, k]
+
             df_processed['battery_id'] = bat_id
             processed_data.append(df_processed)
             
         final_df = pd.concat(processed_data, ignore_index=True)
         self.feature_names = self._get_feature_names(self.config.feature_set_name)
+        
+        if use_cache:
+            final_df.to_pickle(cache_path)
+            print(f"[Info] Features cached to {cache_path}")
         
         print(f"[Info] Preprocessing complete. Total samples: {len(final_df)}")
         return final_df, self.feature_names
@@ -306,7 +415,7 @@ class BatteryDataProcessor:
             'battery_ids': np.array(Bat_ids)
         }
 
-    def prepare_datasets(self, df: pd.DataFrame) -> Tuple[BatteryDataset, BatteryDataset]:
+    def prepare_datasets(self, df: pd.DataFrame) -> Tuple['BatteryDataset', 'BatteryDataset']:
         """
         전체 파이프라인 실행: 열차/테스트 분할 -> 스케일링 -> 윈도우 생성 -> Dataset 반환
         """
