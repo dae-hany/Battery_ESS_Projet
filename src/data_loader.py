@@ -38,7 +38,7 @@ from src.features.delta_q import extract_delta_q, interpolate_qv
 class DataConfig:
     """데이터 처리 관련 설정 클래스"""
     # 기본 경로 설정 (사용자 환경에 맞게 수정 필요 시 main에서 주입)
-    base_dir: str = r"C:\Users\daeho\OneDrive\바탕 화면\Battery_ESS_Project"
+    base_dir: str = os.getcwd()
     metadata_path: str = None
     data_dir: str = None
     cache_dir: str = None # 캐시 디렉토리
