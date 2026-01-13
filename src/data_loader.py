@@ -126,6 +126,9 @@ class BatteryDataProcessor:
         elif feature_set_name == 'delta_q':
             # Delta Q only (on top of dynamic)
             return basic_features + dynamic_features + stat_features + delta_q_features
+        elif feature_set_name == 'delta_q_pure':
+            # Strictly Delta Q features only (No capacity/SOH leakage)
+            return delta_q_features
         elif feature_set_name == 'all':
             # Everything
             return basic_features + dynamic_features + stat_features + delta_q_features + sig_features
@@ -261,7 +264,7 @@ class BatteryDataProcessor:
             
             # --- Advanced Features ---
             need_sig = self.config.feature_set_name in ['advanced', 'all']
-            need_delta_q = self.config.feature_set_name in ['delta_q', 'all']
+            need_delta_q = self.config.feature_set_name in ['delta_q', 'delta_q_pure', 'all']
             
             if need_sig or need_delta_q:
                 print(f"  > Extracting advanced features for {bat_id}...", end='\r')

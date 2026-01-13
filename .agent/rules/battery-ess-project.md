@@ -26,7 +26,7 @@ trigger: always_on
     - `results/`: 모델 가중치(.pth) 및 결과 메트릭(.json, .csv) 저장.
     - `plots/`: 학습 곡선, 생존 함수, RUL 예측 시각화 이미지 저장.
 - **실행 명령어 예시**:
-    - `& C:/Users/daeho/anaconda3/envs/EDA/python.exe src/main.py`
+    - `& C:/Users/daeho/anaconda3/envs/ess/python.exe src/main.py`
 
 ## 3. 코딩 컨벤션 (Coding Standards)
 - **언어**: 주석과 문서화(Docstring)는 **한국어**로 작성한다.

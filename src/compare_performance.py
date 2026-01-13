@@ -116,7 +116,9 @@ def train_and_evaluate(feature_set: str, epochs: int = 50) -> Dict[str, float]:
         'c_index': best_cindex,
         'rmse': rmse_val,
         'best_epoch': best_epoch,
-        'input_dim': input_dim
+        'input_dim': input_dim,
+        'history': history,
+        'feature_set': feature_set
     }
 
 def main():

@@ -19,6 +19,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from dataclasses import dataclass
 
 # 프로젝트 루트 경로를 sys.path에 추가하여 src 모듈 임포트 가능하게 함
@@ -66,34 +67,52 @@ class ExperimentConfig:
 # Visualization Helper
 # ===================================================================================
 
-def plot_training_history(history, save_path):
-    """학습 History (Loss, C-Index) 시각화 및 저장"""
+def plot_loss(history, save_path):
     epochs = range(1, len(history['train_loss']) + 1)
-    
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    
-    # 1. Loss Curve
-    ax1.plot(epochs, history['train_loss'], 'b-', label='Train Loss')
-    ax1.plot(epochs, history['val_loss'], 'r--', label='Val Loss')
-    ax1.set_title('Training & Validation Loss')
-    ax1.set_xlabel('Epochs')
-    ax1.set_ylabel('Loss (Cox PH)')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # 2. C-Index Curve
-    ax2.plot(epochs, history['train_cindex'], 'b-', label='Train C-Index')
-    ax2.plot(epochs, history['val_cindex'], 'r--', label='Val C-Index')
-    ax2.set_title('Concordance Index (C-Index)')
-    ax2.set_xlabel('Epochs')
-    ax2.set_ylabel('C-Index')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    
-    plt.tight_layout()
+    plt.figure(figsize=(8, 6))
+    plt.plot(epochs, history['train_loss'], 'b-', label='Train Loss')
+    plt.plot(epochs, history['val_loss'], 'r--', label='Val Loss')
+    plt.title('Training and Validation Loss')
+    plt.xlabel('Epochs')
+    plt.ylabel('Loss (Cox PH)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
     plt.savefig(save_path)
-    print(f"[Info] Training history plot saved to: {save_path}")
     plt.close()
+    print(f"[Info] Loss plot saved to: {save_path}")
+
+def plot_cindex(history, save_path):
+    epochs = range(1, len(history['train_cindex']) + 1)
+    plt.figure(figsize=(8, 6))
+    plt.plot(epochs, history['train_cindex'], 'b-', label='Train C-Index')
+    plt.plot(epochs, history['val_cindex'], 'r--', label='Val C-Index')
+    plt.title('Concordance Index (C-Index) Trends')
+    plt.xlabel('Epochs')
+    plt.ylabel('C-Index')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.savefig(save_path)
+    plt.close()
+    print(f"[Info] C-Index plot saved to: {save_path}")
+
+def plot_rul_scatter(true_rul, pred_rul, save_path):
+    plt.figure(figsize=(8, 8))
+    plt.scatter(true_rul, pred_rul, alpha=0.6, color='blue', label='Predictions')
+    
+    # Perfect alignment line
+    min_val = min(min(true_rul), min(pred_rul))
+    max_val = max(max(true_rul), max(pred_rul))
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--', label='Ideal (y=x)')
+    
+    plt.title('Predicted RUL vs True RUL')
+    plt.xlabel('True RUL (Cycles)')
+    plt.ylabel('Predicted Expected RUL (Cycles)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.axis('equal')
+    plt.savefig(save_path)
+    plt.close()
+    print(f"[Info] RUL Scatter plot saved to: {save_path}")
 
 # ===================================================================================
 # Main Pipeline
@@ -152,18 +171,20 @@ def run_pipeline():
     # 5. 결과 저장 및 시각화
     print("\n[Step 4] Saving Results...")
     
-    # A. Model Weights
-    model_path = os.path.join(results_dir, "lstm_deepsurv_best.pth")
-    torch.save(trainer.model.state_dict(), model_path)
-    print(f"   Saved model weights: {model_path}")
+    # Save History
+    history_path = os.path.join(results_dir, "training_history.json")
+    # Convert numpy types to float for JSON serialization
+    serializable_history = {k: [float(v) for v in vals] for k, vals in history.items()}
+    with open(history_path, 'w') as f:
+        json.dump(serializable_history, f, indent=4)
+        
+    print(f"[Info] Training history saved to: {history_path}")
     
-    # B. Visualization
-    # B. Visualization
+    # Skip plotting here to avoid crashes - do it in separate script
     # try:
-    #     plot_path = os.path.join(plots_dir, "training_history.png")
-    #     plot_training_history(history, plot_path)
-    # except Exception as e:
-    #     print(f"[Warning] Failed to save plot: {e}")
+    #     plot_loss(history, os.path.join(plots_dir, "loss_curve.png"))
+    #     ...
+    # except...
     
     # C. Final Metrics (Best Validation Score)
     print("   [Debug] Constructing final_metrics...")
@@ -226,6 +247,38 @@ def run_pipeline():
         
         final_metrics['val_rmse'] = float(rmse_val)
         
+        # --- Save Detailed Predictions ---
+        print("   [Debug] Saving detailed predictions...")
+        results_df = pd.DataFrame({
+            'True_RUL': val_times,
+            'Pred_RUL': pred_rul
+        })
+        results_df.to_csv(os.path.join(results_dir, "rul_predictions.csv"), index=False)
+        
+        # Plot RUL Scatter
+        try:
+            plot_rul_scatter(val_times, pred_rul, os.path.join(plots_dir, "rul_scatter.png"))
+        except Exception as e:
+            print(f"[Warning] Failed to plot RUL scatter: {e}")
+            
+        # --- Plot Sample Survival Curves ---
+        try:
+            plt.figure(figsize=(10, 6))
+            # Plot first 3 samples from validation set
+            times = surv_df.index
+            for i in range(min(3, surv_df.shape[1])):
+                plt.plot(times, surv_df.iloc[:, i], label=f'Sample {i} (True={val_times[i]:.1f}, Pred={pred_rul[i]:.1f})')
+                
+            plt.title("Estimated Survival Functions S(t|x)")
+            plt.xlabel("Time (Cycles)")
+            plt.ylabel("Survival Probability")
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.savefig(os.path.join(plots_dir, "survival_curve_sample.png"))
+            plt.close()
+        except Exception as e:
+            print(f"[Warning] Failed to plot survival curves: {e}")
+
         # Update JSON
         with open(metrics_path, 'w') as f:
             json.dump(final_metrics, f, indent=4)

@@ -1,6 +1,5 @@
 {
-    "best_epoch": 27,
-    "best_val_cindex": 0.9891558841651263,
-    "min_val_loss": 1.684344619512558,
-    "val_rmse": 22.09952639574762
+    "best_epoch": 13,
+    "best_val_cindex": 0.989648798521257,
+    "min_val_loss": 1.809955358505249
 }
